@@ -44,87 +44,85 @@ on:
 
 jobs:
   build:
-    runs-on: self-hosted
-
-    container:
-      image: fedora:38
-      options: --userns=keep-id
-
+    if: github.event.repository.owner.id == github.event.sender.id
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-    - name: Install Required Dependencies
+ 
+    # You might want to Checkout your repo first, but not mandatory
+    - name: Check Out
+      uses: actions/checkout@v3
+
+    - name: Initialize workspace
       run: |
-        dnf install -y git aria2 make gcc gcc-c++ python3 python3-pip jq
+        mkdir workspace
+        cd workspace
+        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+      id: pwd
+
+    - name: Prepare the build environment
+      run: |
+        sudo apt install git aria2 -y
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
-        bash setup/android_build_env.sh
+        sudo bash setup/android_build_env.sh
         sed -i 's/cd -/cd ../g' setup/install_android_sdk.sh
-        bash setup/install_android_sdk.sh
-      working-directory: /workspace
+        sudo bash setup/install_android_sdk.sh
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Sync OrangeFox sources and minimal manifest
       run: |
+        cd ${{ steps.pwd.outputs.workspace-folder }}
         git clone ${{ github.event.inputs.SYNC_URL }}
         cd sync
-        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-      working-directory: /workspace
+        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone device tree
       run: |
-        cd /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         git clone ${{ github.event.inputs.DEVICE_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.DEVICE_PATH }}
-      working-directory: /workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone common tree
-      if: github.event.inputs.COMMON_TREE_URL != null && github.event.inputs.COMMON_PATH != null
+      if: |
+        github.event.inputs.COMMON_TREE_URL != null
+        && github.event.inputs.COMMON_PATH != null
       run: |
-        cd /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         git clone ${{ github.event.inputs.COMMON_TREE_URL }} -b ${{ github.event.inputs.DEVICE_TREE_BRANCH }} ./${{ github.event.inputs.COMMON_PATH }}
-      working-directory: /workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Building recovery
       run: |
-        cd /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
         set +e
         rm -rf .repo
         source build/envsetup.sh
         export ALLOW_MISSING_DEPENDENCIES=true
         set -e
         lunch ${{ github.event.inputs.MAKEFILE_NAME }}-eng && make clean && mka adbd ${{ github.event.inputs.BUILD_TARGET }}image -j$(nproc --all)
-      working-directory: /workspace
+      working-directory: ${{ steps.pwd.outputs.workspace-folder }}
       continue-on-error: true
 
-    - name: Check the output directory before creating a release
+    - name: Check the output directory before uploading
       run: |
-        ls -al /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/
         echo
-        ls -al /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
-      continue-on-error: true
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
 
-    - name: Create GitHub Release
-      run: |
-        release_name="${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}"
-        release_body="Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }} Device: ${{ github.event.inputs.DEVICE_NAME }} Target: ${{ github.event.inputs.BUILD_TARGET }}"
-        release_tag="${{ github.run_id }}"
-
-        # Create a draft release
-        response=$(curl -X POST -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -d "{\"tag_name\": \"$release_tag\",\"name\": \"$release_name\",\"draft\": true,\"body\": \"$release_body\"}" \
-          "https://api.github.com/repos/${{ github.repository }}/releases")
-
-        # Get the release ID from the response
-        release_id=$(echo "$response" | jq -r '.id')
-
-        asset_path="/workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
-
-        for file in $asset_path/*.img $asset_path/*.zip; do
-          filename=$(basename "$file")
-          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Content-Type: application/octet-stream" \
-            --data-binary @"$file" "https://uploads.github.com/repos/${{ github.repository }}/releases/$release_id/assets?name=$filename"
-        done
-
-        # Publish the draft release
-        curl -X PATCH -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -d "{\"draft\": false}" \
-          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id"
+    - name: Upload to Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
+        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        tag_name: ${{ github.run_id }}
+        body: |
+          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
+          Device: ${{ github.event.inputs.DEVICE_NAME }}
+          Target: ${{ github.event.inputs.BUILD_TARGET }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
