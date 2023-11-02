@@ -53,7 +53,7 @@ jobs:
     steps:
     - name: Update and install required packages
       run: |
-        dnf install -y git aria2
+        dnf install -y git aria2 podman
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         bash setup/android_build_env.sh
@@ -100,16 +100,7 @@ jobs:
         ls -al /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
 
     - name: Upload to Release
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
-          /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
-        tag_name: ${{ github.run_id }}
-        body: |
-          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: ${{ github.event.inputs.DEVICE_NAME }}
-          Target: ${{ github.event.inputs.BUILD_TARGET }}
+      run: |
+        podman run --rm -v /workspace:/workspace:Z docker.io/softprops/action-gh-release:v1 files --name "${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}" --tag "${{ github.run_id }}" --body "Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }} Device: ${{ github.event.inputs.DEVICE_NAME }} Target: ${{ github.event.inputs.BUILD_TARGET }}" ${{ secrets.GITHUB_TOKEN }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
