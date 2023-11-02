@@ -51,9 +51,9 @@ jobs:
       options: --userns=keep-id
 
     steps:
-    - name: Update and install required packages
+    - name: Install Required Dependencies
       run: |
-        dnf install -y git aria2 podman
+        dnf install -y git aria2 wget zip make gcc gcc-c++ python3 python3-pip jq
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         bash setup/android_build_env.sh
@@ -101,6 +101,16 @@ jobs:
 
     - name: Upload to Release
       run: |
-        podman run --rm -v /workspace:/workspace:Z docker.io/softprops/action-gh-release:v1 files --name "${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}" --tag "${{ github.run_id }}" --body "Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }} Device: ${{ github.event.inputs.DEVICE_NAME }} Target: ${{ github.event.inputs.BUILD_TARGET }}" ${{ secrets.GITHUB_TOKEN }}
+        release_id=$(curl -X POST -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -d "{\"tag_name\": \"${{ github.run_id }}\",\"name\": \"${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}\"}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases" | jq -r '.id')
+
+        asset_path="/workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
+
+        for file in $asset_path/*.img $asset_path/*.zip; do
+          filename=$(basename "$file")
+          curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Content-Type: application/octet-stream" \
+            --data-binary @"$file" "https://uploads.github.com/repos/${{ github.repository }}/releases/$release_id/assets?name=$filename"
+        done
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
