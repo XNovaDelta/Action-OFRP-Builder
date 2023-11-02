@@ -53,7 +53,7 @@ jobs:
     steps:
     - name: Install Required Dependencies
       run: |
-        dnf install -y git aria2 wget zip make gcc gcc-c++ python3 python3-pip jq
+        dnf install -y git aria2 make gcc gcc-c++ python3 python3-pip jq
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         bash setup/android_build_env.sh
@@ -93,17 +93,26 @@ jobs:
       working-directory: /workspace
       continue-on-error: true
 
-    - name: Check the output directory before uploading
+    - name: Check the output directory before creating a release
       run: |
         ls -al /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/
         echo
         ls -al /workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
+      continue-on-error: true
 
-    - name: Upload to Release
+    - name: Create GitHub Release
       run: |
-        release_id=$(curl -X POST -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -d "{\"tag_name\": \"${{ github.run_id }}\",\"name\": \"${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}\"}" \
-          "https://api.github.com/repos/${{ github.repository }}/releases" | jq -r '.id')
+        release_name="${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}"
+        release_body="Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }} Device: ${{ github.event.inputs.DEVICE_NAME }} Target: ${{ github.event.inputs.BUILD_TARGET }}"
+        release_tag="${{ github.run_id }}"
+
+        # Create a draft release
+        response=$(curl -X POST -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -d "{\"tag_name\": \"$release_tag\",\"name\": \"$release_name\",\"draft\": true,\"body\": \"$release_body\"}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases")
+
+        # Get the release ID from the response
+        release_id=$(echo "$response" | jq -r '.id')
 
         asset_path="/workspace/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}"
 
@@ -112,5 +121,10 @@ jobs:
           curl -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Content-Type: application/octet-stream" \
             --data-binary @"$file" "https://uploads.github.com/repos/${{ github.repository }}/releases/$release_id/assets?name=$filename"
         done
+
+        # Publish the draft release
+        curl -X PATCH -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -d "{\"draft\": false}" \
+          "https://api.github.com/repos/${{ github.repository }}/releases/$release_id"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
